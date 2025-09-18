@@ -5,7 +5,7 @@ which removes ads and adds support for features like SponsorBlock.
 
 ## Setup
 
-MuTube has been tested using Frida 16.6.6 and YouTube 4.50.03 on an Apple TV 4K.
+MuTube has been tested using Frida 17.3.0 and YouTube 4.51.08 on an Apple TV 4K.
 
 1. Install [insert_dylib](https://github.com/Tyilo/insert_dylib).
 

@@ -1,5 +1,5 @@
 const MODULE = "YouTubeUnstable";
-const base = Module.findBaseAddress(MODULE);
+const base = Process.getModuleByName(MODULE).base;
 
 function jsStringToNative(str) {
   // convert a JavaScript string to a char* buffer
@@ -16,12 +16,12 @@ function jsStringToNative(str) {
   vals.push(0); // null terminator
 
   const tmpBuf = Memory.alloc(vals.length);
-  Memory.writeByteArray(tmpBuf, vals);
+  tmpBuf.writeByteArray(vals);
   return tmpBuf;
 }
 
-const insertPtr = Module.findExportByName(
-  "libc++.1.dylib",
+const libcpp = Process.getModuleByName('libc++.1.dylib');
+const insertPtr = libcpp.findExportByName(
   "_ZNSt3__112basic_stringIcNS_11char_traitsIcEENS_9allocatorIcEEE6insertEmPKcm"
 );
 const insertFn = new NativeFunction(insertPtr, "pointer", [
@@ -63,8 +63,7 @@ function readStdString(str) {
 }
 
 // unused for now, but useful for debugging by modifying existing JS.
-const replacePtr = Module.findExportByName(
-  "libc++.1.dylib",
+const replacePtr = libcpp.findExportByName(
   "_ZNSt3__112basic_stringIcNS_11char_traitsIcEENS_9allocatorIcEEE7replaceEmmPKc"
 );
 const replaceFn = new NativeFunction(replacePtr, "pointer", [
@@ -132,7 +131,7 @@ window.MediaSource.isTypeSupported = function(mimeType) {
 
 // HTMLScriptElement::Execute
 // https://cobalt.googlesource.com/cobalt/+/19.lts.1+/src/cobalt/dom/html_script_element.cc#593
-Interceptor.attach(base.add(0xed4a30), {
+Interceptor.attach(base.add(0xed5270), {
   onEnter(args) {
     const content = args[1];
     if (readStdString(content).res.includes("yttv")) {
@@ -143,7 +142,7 @@ Interceptor.attach(base.add(0xed4a30), {
 
 // DirectiveList::AddDirective
 // https://cobalt.googlesource.com/cobalt/+/19.lts.1+/src/cobalt/csp/directive_list.cc#834
-Interceptor.attach(base.add(0x152ccc8), {
+Interceptor.attach(base.add(0x152d508), {
   onEnter(args) {
     prepend(
       args[2],
