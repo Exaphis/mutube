@@ -354,6 +354,7 @@ def build_stub(kind, stub_va, addrs, orig_ins, enable_printf_logs):
         # hardware, and every other codec fall through to Cobalt unchanged.
         lines += [
             "ldr x0, [sp]",
+            "cbz x0, media_profile2_continue",
             *load_addr("x1", addrs["vp9_profile2_full"]),
             *load_addr("x16", addrs["strstr"]),
             "blr x16",
