@@ -1,11 +1,13 @@
 # μTube
 
 MuTube enhances YouTube on Apple TV with [TizenTube Cobalt](https://github.com/reisxd/TizenTubeCobalt)'s userscript,
-which removes ads and adds support for features like SponsorBlock.
+which removes ads and adds support for features like SponsorBlock. This fork also restores Cobalt's native 4K HDR
+path for VP9 Profile 2 while leaving SDR formats and YouTube's original color metadata untouched.
 
 ## Setup
 
-MuTube has been tested with YouTube 4.54.01 on an Apple TV 4K.
+MuTube has been tested with YouTube 4.54.01 on an Apple TV 4K. Native patch addresses are specific to this exact
+YouTube version; the patcher validates the original ARM64 instructions and stops if they do not match.
 
 ### Requirements
 
