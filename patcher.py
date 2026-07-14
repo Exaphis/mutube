@@ -45,6 +45,39 @@ PATCHES = [
     },
 ]
 
+COBALT_HOOKS = [
+    {
+        "name": "cobalt_vp9_profile2_support",
+        "kind": "media_support",
+        "entry_va": 0x101180894,
+        "expect": ("mov", "x20, x1"),
+    },
+]
+
+# YouTube 4.54.01 Cobalt gates used by the tvOS HDR output path. The patches
+# keep the app's existing AVDisplayCriteria and VP9 Profile 2 flow active after
+# the IPA is re-signed.
+COBALT_HDR_PATCHES = [
+    {
+        "name": "cobalt_display_criteria_gate",
+        "va": 0x101142BE4,
+        "expect": ("cbz", "w0, #0x101142d0c"),
+        "replacement": 0xD503201F,  # nop
+    },
+    {
+        "name": "cobalt_vp9_hdr_hw_gate",
+        "va": 0x10114F840,
+        "expect": ("cbz", "w0, #0x10114f874"),
+        "replacement": 0xD503201F,  # nop
+    },
+    {
+        "name": "cobalt_vp9_hdr_4k60_gate",
+        "va": 0x10114F870,
+        "expect": ("b", "#0x10114f730"),
+        "replacement": 0x14000009,  # b 0x10114f894 (supported)
+    },
+]
+
 MD = Cs(CS_ARCH_ARM64, CS_MODE_LITTLE_ENDIAN)
 MD.detail = False
 
@@ -314,6 +347,65 @@ def build_stub(kind, stub_va, addrs, orig_ins, enable_printf_logs):
             "blr x16",
             *emit_log(addrs, "log_csp_inject", include_ra=False, enabled=enable_printf_logs),
         ]
+    elif kind == "media_support":
+        # Re-signed builds can reject VP9 Profile 2 before YouTube exposes HDR
+        # formats. Report probable support only for Profile 2 MIME strings when
+        # AVPlayer confirms HDR playback eligibility. Missing APIs, SDR-only
+        # hardware, and every other codec fall through to Cobalt unchanged.
+        lines += [
+            "ldr x0, [sp]",
+            "cbz x0, media_profile2_continue",
+            *load_addr("x1", addrs["vp9_profile2_full"]),
+            *load_addr("x16", addrs["strstr"]),
+            "blr x16",
+            "cbnz x0, media_profile2_check_hdr",
+            "ldr x0, [sp]",
+            *load_addr("x1", addrs["vp9_profile2_short"]),
+            *load_addr("x16", addrs["strstr"]),
+            "blr x16",
+            "cbz x0, media_profile2_continue",
+            "media_profile2_check_hdr:",
+            *load_addr("x0", addrs["avplayer_class_name"]),
+            *load_addr("x16", addrs["objc_get_class"]),
+            "blr x16",
+            "cbz x0, media_profile2_continue",
+            "mov x20, x0",
+            "movn x0, #1",
+            *load_addr("x1", addrs["sel_register_name_symbol"]),
+            *load_addr("x16", addrs["dlsym"]),
+            "blr x16",
+            "cbz x0, media_profile2_continue",
+            "mov x16, x0",
+            *load_addr("x0", addrs["hdr_eligible_selector"]),
+            "blr x16",
+            "cbz x0, media_profile2_continue",
+            "mov x21, x0",
+            "movn x0, #1",
+            *load_addr("x1", addrs["class_get_method_symbol"]),
+            *load_addr("x16", addrs["dlsym"]),
+            "blr x16",
+            "cbz x0, media_profile2_continue",
+            "mov x16, x0",
+            "mov x0, x20",
+            "mov x1, x21",
+            "blr x16",
+            "cbz x0, media_profile2_continue",
+            "mov x0, x20",
+            "mov x1, x21",
+            *load_addr("x16", addrs["objc_msg_send"]),
+            "blr x16",
+            "tbz w0, #0, media_profile2_continue",
+            "media_profile2_supported:",
+            *restore_regs(),
+            "mov w0, #2",
+            "ldp x29, x30, [sp, #0x130]",
+            "ldp x20, x19, [sp, #0x120]",
+            "ldp x22, x21, [sp, #0x110]",
+            "ldp x28, x27, [sp, #0x100]",
+            "add sp, sp, #0x140",
+            "ret",
+            "media_profile2_continue:",
+        ]
     else:
         raise ValueError(f"unknown stub kind: {kind}")
 
@@ -339,6 +431,12 @@ def patch_binary(data, enable_printf_logs=False):
         "yttv": put(YTTV_NEEDLE + b"\0"),
         "inject": put(js + b"\0"),
         "csp": put(CSP_PREFIX + b"\0"),
+        "vp9_profile2_full": put(b"vp09.02\0"),
+        "vp9_profile2_short": put(b"vp9.2\0"),
+        "avplayer_class_name": put(b"AVPlayer\0"),
+        "sel_register_name_symbol": put(b"sel_registerName\0"),
+        "class_get_method_symbol": put(b"class_getClassMethod\0"),
+        "hdr_eligible_selector": put(b"eligibleForHDRPlayback\0"),
     }
     if enable_printf_logs:
         offs |= {
@@ -357,13 +455,17 @@ def patch_binary(data, enable_printf_logs=False):
         "csp_len": len(CSP_PREFIX),
         "find": resolve_stub_va(info, "__ZNKSt3__112basic_stringIcNS_11char_traitsIcEENS_9allocatorIcEEE4findEPKcmm"),
         "insert": resolve_stub_va(info, "__ZNSt3__112basic_stringIcNS_11char_traitsIcEENS_9allocatorIcEEE6insertEmPKcm"),
+        "strstr": resolve_stub_va(info, "_strstr"),
+        "objc_get_class": resolve_stub_va(info, "_objc_getClass"),
+        "objc_msg_send": resolve_stub_va(info, "_objc_msgSend"),
+        "dlsym": resolve_stub_va(info, "_dlsym"),
     }
     if enable_printf_logs:
         addrs["printf"] = resolve_stub_va(info, "_printf")
 
     # Resolve final patch sites dynamically from function entry + prologue scan.
     resolved = []
-    for p in PATCHES:
+    for p in PATCHES + COBALT_HOOKS:
         site_va, site_off, orig_ins, insn = resolve_patch_site(data, info, p["entry_va"])
         if (insn.mnemonic, insn.op_str) != p["expect"]:
             raise ValueError(
@@ -395,6 +497,26 @@ def patch_binary(data, enable_printf_logs=False):
                 "patch_site_va": p["site_va"],
                 "stub_va": s["va"],
                 "stub_len": len(s["blob"]),
+            }
+        )
+
+    for patch in COBALT_HDR_PATCHES:
+        patch_off = va_to_off(info, patch["va"])
+        insn = disasm_one(data[patch_off:patch_off + 4], patch["va"])
+        if (insn.mnemonic, insn.op_str) != patch["expect"]:
+            raise ValueError(
+                f"{patch['name']}: at {hex(patch['va'])} expected "
+                f"{patch['expect'][0]} {patch['expect'][1]}, got "
+                f"{insn.mnemonic} {insn.op_str}"
+            )
+        data[patch_off:patch_off + 4] = struct.pack("<I", patch["replacement"])
+        out.append(
+            {
+                "name": patch["name"],
+                "entry_va": patch["va"],
+                "patch_site_va": patch["va"],
+                "stub_va": 0,
+                "stub_len": 0,
             }
         )
 
