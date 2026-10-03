@@ -9,6 +9,19 @@
 if (document.mutube) return;
 document.mutube = true;
 
+// Cobalt goes straight from readyState "loading" to "complete" without ever firing
+// DOMContentLoaded. TizenTube is injected while still "loading", so its modules that
+// wait for that event (player buttons incl. Speed Controls, extra subtitles) never
+// start. Fire it ourselves at load if Cobalt didn't. Dispatched on document and
+// window separately (non-bubbling) so listeners on either get it exactly once.
+var dclFired = false;
+document.addEventListener('DOMContentLoaded', function () { dclFired = true; });
+window.addEventListener('load', function () {
+  if (dclFired) return;
+  document.dispatchEvent(new Event('DOMContentLoaded'));
+  window.dispatchEvent(new Event('DOMContentLoaded'));
+});
+
 var script = document.createElement('script');
 script.src = "https://cdn.jsdelivr.net/npm/@foxreis/tizentube/dist/userScript.js?v=" + Date.now();
 script.async = true;
