@@ -8,6 +8,12 @@ PATCHER_FLAGS += --enable-printf-logs
 endif
 endif
 
+ifneq ($(KEEP_SUPPORTED_DEVICES),)
+ifneq ($(KEEP_SUPPORTED_DEVICES),0)
+PATCHER_FLAGS += --keep-supported-devices
+endif
+endif
+
 .PHONY: all
 all: $(OUTPUT_IPA)
 
