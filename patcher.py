@@ -7,6 +7,8 @@
 # ]
 # ///
 import argparse
+import plistlib
+import re
 import subprocess
 import struct
 import tempfile
@@ -523,20 +525,60 @@ def patch_binary(data, enable_printf_logs=False):
     return out
 
 
-def patch_ipa(in_path, out_path, enable_printf_logs=False):
-    # Replace only app binary inside IPA; preserve all other entries.
+def strip_supported_devices(raw):
+    """Drop UISupportedDevices from Info.plist so the IPA installs on any tvOS device
+    (the stock app only lists the Apple TV 4K 1st/2nd gen, which blocks Apple TV HD).
+    Returns (new_bytes, removed_value_or_None). Everything else in the plist is kept."""
+    before = plistlib.loads(raw)
+    if "UISupportedDevices" not in before:
+        return raw, None
+    removed = before["UISupportedDevices"]
+    if raw.lstrip().startswith(b"<?xml"):
+        # Textual edit keeps the rest of the XML byte-identical.
+        out = re.sub(
+            rb"[ \t]*<key>UISupportedDevices</key>\s*<array>.*?</array>[ \t]*\r?\n?",
+            b"",
+            raw,
+            count=1,
+            flags=re.S,
+        )
+    else:
+        stripped = dict(before)
+        stripped.pop("UISupportedDevices")
+        out = plistlib.dumps(stripped, fmt=plistlib.FMT_BINARY)
+    expected = dict(before)
+    expected.pop("UISupportedDevices")
+    if plistlib.loads(out) != expected:
+        raise ValueError("Info.plist edit changed more than UISupportedDevices")
+    return out, removed
+
+
+def patch_ipa(in_path, out_path, enable_printf_logs=False, keep_supported_devices=False):
+    # Replace the app binary (and strip UISupportedDevices from Info.plist); preserve all other entries.
     with zipfile.ZipFile(in_path, "r") as zin:
         infos = zin.infolist()
         bin_info = next((i for i in infos if i.filename.endswith("/YouTubeUnstable")), None)
         if not bin_info:
             raise ValueError("YouTubeUnstable binary not found in IPA")
+        plist_info = next((i for i in infos if re.fullmatch(r"Payload/[^/]+\.app/Info\.plist", i.filename)), None)
 
         binary = bytearray(zin.read(bin_info.filename))
         meta = patch_binary(binary, enable_printf_logs=enable_printf_logs)
 
+        new_plist = None
+        if plist_info and not keep_supported_devices:
+            new_plist, removed = strip_supported_devices(zin.read(plist_info.filename))
+            if removed is not None:
+                print("Info.plist: removed UISupportedDevices", removed)
+
         with zipfile.ZipFile(out_path, "w") as zout:
             for info in infos:
-                payload = binary if info.filename == bin_info.filename else zin.read(info.filename)
+                if info.filename == bin_info.filename:
+                    payload = binary
+                elif new_plist is not None and info.filename == plist_info.filename:
+                    payload = new_plist
+                else:
+                    payload = zin.read(info.filename)
                 zout.writestr(info, payload)
     return meta
 
@@ -550,9 +592,19 @@ def main():
         action="store_true",
         help="enable MUTUBE_* printf logs in hook stubs (disabled by default)",
     )
+    ap.add_argument(
+        "--keep-supported-devices",
+        action="store_true",
+        help="leave UISupportedDevices in Info.plist (by default it is removed so Apple TV HD can install)",
+    )
     args = ap.parse_args()
 
-    meta = patch_ipa(args.inp, args.outp, enable_printf_logs=args.enable_printf_logs)
+    meta = patch_ipa(
+        args.inp,
+        args.outp,
+        enable_printf_logs=args.enable_printf_logs,
+        keep_supported_devices=args.keep_supported_devices,
+    )
     print("Patched IPA written to:", args.outp)
     for entry in meta:
         print("Patch:", entry["name"])
