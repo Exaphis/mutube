@@ -78,6 +78,89 @@ COBALT_HDR_PATCHES = [
     },
 ]
 
+# YouTube 4.54.01 Cobalt VP9 and tvOS renderer tuning. These changes keep the
+# existing decoder and renderer paths, but adjust queue sizing, preroll, and
+# late-frame handling for high-resolution playback.
+COBALT_PLAYBACK_PATCHES = [
+    {
+        "name": "cobalt_vpx_4k_sdr_frame_pool_gate",
+        "va": 0x101129830,
+        "expect": ("cbz", "w9, #0x101129858"),
+        "replacement": 0xD503201F,  # nop
+    },
+    {
+        "name": "cobalt_vpx_4k_preroll_8_frames",
+        "va": 0x101129844,
+        "expect": ("mov", "w13, #0x30"),
+        "replacement": 0x5280010D,  # mov w13, #8
+    },
+    {
+        "name": "cobalt_vpx_4k_sdr_loop_filter_opt_gate",
+        "va": 0x101129E60,
+        "expect": ("cbz", "w8, #0x101129e90"),
+        "replacement": 0xD503201F,  # nop
+    },
+    {
+        "name": "tvos_renderer_cap_frames_in_flight",
+        "va": 0x101144290,
+        "expect": ("add", "x20, x8, x20"),
+        "replacement": 0x8B140914,  # add x20, x8, x20, lsl #2
+    },
+    {
+        "name": "tvos_renderer_drop_late_frame_count",
+        "va": 0x101144C90,
+        "expect": ("ldr", "x8, [x19, #0x1e0]"),
+        "replacement": 0x110006F7,  # add w23, w23, #1
+    },
+    {
+        "name": "tvos_renderer_drop_late_frame_counter",
+        "va": 0x101144C94,
+        "expect": ("add", "x8, x8, #1"),
+        "replacement": 0xD503201F,  # nop
+    },
+    {
+        "name": "tvos_renderer_drop_late_frame_enqueue",
+        "va": 0x101144C98,
+        "expect": ("str", "x8, [x19, #0x1e0]"),
+        "replacement": 0x14000005,  # b 0x101144cac
+    },
+]
+
+# Raise decoder and VP9 worker thread priorities. This requests higher
+# scheduling priority; it does not set CPU affinity or guarantee P-core pinning.
+COBALT_THREAD_PRIORITY_PATCHES = [
+    {
+        "name": "cobalt_vpx_decoder_thread_priority",
+        "va": 0x101129488,
+        "expect": ("mov", "w3, #0x2"),
+        "replacement": 0x52800063,  # mov w3, #3
+    },
+    {
+        "name": "cobalt_vpx_output_thread_priority",
+        "va": 0x101129EA8,
+        "expect": ("mov", "w3, #0x2"),
+        "replacement": 0x52800063,  # mov w3, #3
+    },
+    {
+        "name": "cobalt_vpx_worker_thread_priority_arg",
+        "va": 0x101302AC4,
+        "expect": ("ldr", "x0, [x0]"),
+        "replacement": 0x52800060,  # mov w0, #3
+    },
+    {
+        "name": "cobalt_vpx_worker_thread_set_priority",
+        "va": 0x101302AC8,
+        "expect": ("bl", "#0x101c3d264"),
+        "replacement": 0x97F94A29,  # bl SbThreadSetPriority
+    },
+    {
+        "name": "cobalt_vpx_worker_thread_resume_loop",
+        "va": 0x101302ACC,
+        "expect": ("ldr", "w8, [x19, #0x8]"),
+        "replacement": 0x1400000A,  # b 0x101302af4
+    },
+]
+
 MD = Cs(CS_ARCH_ARM64, CS_MODE_LITTLE_ENDIAN)
 MD.detail = False
 
@@ -500,7 +583,7 @@ def patch_binary(data, enable_printf_logs=False):
             }
         )
 
-    for patch in COBALT_HDR_PATCHES:
+    for patch in COBALT_HDR_PATCHES + COBALT_PLAYBACK_PATCHES + COBALT_THREAD_PRIORITY_PATCHES:
         patch_off = va_to_off(info, patch["va"])
         insn = disasm_one(data[patch_off:patch_off + 4], patch["va"])
         if (insn.mnemonic, insn.op_str) != patch["expect"]:
