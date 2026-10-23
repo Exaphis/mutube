@@ -32,3 +32,7 @@ make PRINTF_LOGS=1
 Sideload the generated `mutube.ipa` onto your Apple TV using a tool like [Sideloadly](https://sideloadly.io/).
 Once installed, open the YouTube app and you should see a popup on the top right corner indicating that
 TizenTube has loaded successfully.
+
+HDR formats can be enabled or disabled from the TizenTube settings. Disabling
+the option filters HDR formats before playback selection; it does not change
+Apple's codec entitlements or guarantee hardware decoding.
