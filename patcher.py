@@ -167,11 +167,11 @@ def restore_regs():
 
 def load_payload():
     # Payload is source-of-truth JS kept in a dedicated file.
-    # Ignore full-line // comments so notes can live in inject.js without
-    # being embedded into the runtime payload.
+    # Ignore full-line // comments and leading/trailing whitespace so readable
+    # formatting and notes in inject.js do not consume runtime header padding.
     text = Path(__file__).with_name("inject.js").read_text(encoding="ascii")
-    lines = [line for line in text.splitlines() if not line.lstrip().startswith("//")]
-    cleaned = "\n".join(lines).strip()
+    lines = [line.strip() for line in text.splitlines() if line.strip() and not line.lstrip().startswith("//")]
+    cleaned = "\n".join(lines)
     if not cleaned:
         raise ValueError("inject.js is empty")
     return cleaned.encode("ascii")
