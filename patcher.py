@@ -78,6 +78,74 @@ COBALT_HDR_PATCHES = [
     },
 ]
 
+# The 8-bit VP9 renderer only builds its CVBuffer colour attachments when the
+# 10-bit flag (+0x51) is set, so SDR buffers reach the compositor untagged. On an
+# HDR-configured output the compositor then reads them in the display's space,
+# which blows out highlights. Build the dictionary unconditionally, and skip only
+# the HDR metadata block when the flag is clear: its two CFData values are zero for
+# SDR and a zero ContentLightLevelInfo/MasteringDisplayColorVolume misleads the
+# display. The colour defaults on the way in are all kCVImageBuffer*_ITU_R_709_2.
+#
+# The guard has to fit inside the block, so the two rev+lsr #16 pairs at
+# 0x101128c18 and 0x101128c24 become rev16, which is identical for the
+# zero-extended halfwords loaded here and frees the two slots the guard needs.
+COBALT_COLOR_TAG_PATCHES = [
+    {
+        "name": "cobalt_vpx_tag_unconditional",
+        "va": 0x101128A38,
+        "expect": ("cbz", "w8, #0x101128d68"),
+        "replacement": 0xD503201F,  # nop
+    },
+    {
+        "name": "cobalt_vpx_tag_sdr_gate",
+        "va": 0x101128C10,
+        "expect": ("ldrh", "w8, [x20, #0x84]"),
+        "replacement": 0x39414749,  # ldrb w9, [x26, #0x51]
+    },
+    {
+        "name": "cobalt_vpx_tag_sdr_skip_metadata",
+        "va": 0x101128C14,
+        "expect": ("ldrh", "w9, [x20, #0x88]"),
+        "replacement": 0x34000A89,  # cbz w9, 0x101128d64
+    },
+    {
+        "name": "cobalt_vpx_tag_cll_load",
+        "va": 0x101128C18,
+        "expect": ("rev", "w8, w8"),
+        "replacement": 0x79410A88,  # ldrh w8, [x20, #0x84]
+    },
+    {
+        "name": "cobalt_vpx_tag_cll_swap",
+        "va": 0x101128C1C,
+        "expect": ("lsr", "w8, w8, #0x10"),
+        "replacement": 0x5AC00508,  # rev16 w8, w8
+    },
+    {
+        "name": "cobalt_vpx_tag_cll_store",
+        "va": 0x101128C20,
+        "expect": ("strh", "w8, [sp, #0x18]"),
+        "replacement": 0x790033E8,  # unchanged
+    },
+    {
+        "name": "cobalt_vpx_tag_cll_maxfall_load",
+        "va": 0x101128C24,
+        "expect": ("rev", "w8, w9"),
+        "replacement": 0x79411288,  # ldrh w8, [x20, #0x88]
+    },
+    {
+        "name": "cobalt_vpx_tag_cll_maxfall_swap",
+        "va": 0x101128C28,
+        "expect": ("lsr", "w8, w8, #0x10"),
+        "replacement": 0x5AC00508,  # rev16 w8, w8
+    },
+    {
+        "name": "cobalt_vpx_tag_cll_maxfall_store",
+        "va": 0x101128C2C,
+        "expect": ("strh", "w8, [sp, #0x1a]"),
+        "replacement": 0x790037E8,  # unchanged
+    },
+]
+
 MD = Cs(CS_ARCH_ARM64, CS_MODE_LITTLE_ENDIAN)
 MD.detail = False
 
@@ -500,7 +568,7 @@ def patch_binary(data, enable_printf_logs=False):
             }
         )
 
-    for patch in COBALT_HDR_PATCHES:
+    for patch in COBALT_HDR_PATCHES + COBALT_COLOR_TAG_PATCHES:
         patch_off = va_to_off(info, patch["va"])
         insn = disasm_one(data[patch_off:patch_off + 4], patch["va"])
         if (insn.mnemonic, insn.op_str) != patch["expect"]:
