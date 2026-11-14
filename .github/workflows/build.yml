@@ -1,0 +1,57 @@
+name: Build MuTube IPA
+
+on:
+  workflow_dispatch:
+    inputs:
+      ipa_url:
+        description: Direct download URL of a decrypted YouTube tvOS IPA (4.54.01)
+        required: true
+        type: string
+      printf_logs:
+        description: Enable printf tracing in stubs (PRINTF_LOGS=1)
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 30
+    env:
+      YOUTUBE_IPA: ${{ runner.temp }}/YouTube_decrypted.ipa
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+
+      - name: Check AppleTV SDK
+        run: xcrun --sdk appletvos --show-sdk-path
+
+      - name: Download decrypted YouTube IPA
+        env:
+          IPA_URL: ${{ inputs.ipa_url }}
+        run: |
+          echo "::add-mask::$IPA_URL"
+          curl --fail --location --silent --show-error --retry 3 \
+            --output "$YOUTUBE_IPA" "$IPA_URL"
+          if ! unzip -tq "$YOUTUBE_IPA" > /dev/null; then
+            echo "::error::Downloaded file is not a valid IPA (zip) archive. Make sure ipa_url is a direct download link."
+            exit 1
+          fi
+
+      - name: Build
+        env:
+          PRINTF_LOGS: ${{ inputs.printf_logs && '1' || '' }}
+        run: make YOUTUBE_IPA="$YOUTUBE_IPA" PRINTF_LOGS="$PRINTF_LOGS"
+
+      - name: Upload mutube.ipa
+        uses: actions/upload-artifact@v4
+        with:
+          name: mutube-ipa
+          path: mutube.ipa
+          if-no-files-found: error
